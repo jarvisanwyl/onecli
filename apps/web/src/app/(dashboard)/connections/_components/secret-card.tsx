@@ -25,6 +25,7 @@ import {
   type InjectionConfig,
   isHeaderInjection,
   isParamInjection,
+  isPathInjection,
 } from "@onecli/api/validations/secret";
 import { SecretDialog } from "./secret-dialog";
 
@@ -127,6 +128,20 @@ export const SecretCard = ({
                     Query param{" "}
                     <code className="bg-muted rounded px-1 py-0.5 font-mono">
                       ?{config.paramName}
+                    </code>
+                  </span>
+                )}
+              {secret.type === "generic" &&
+                config &&
+                isPathInjection(config) && (
+                  <span className="text-muted-foreground">
+                    Path{" "}
+                    <code className="bg-muted rounded px-1 py-0.5 font-mono">
+                      {config.pathSearch}
+                    </code>{" "}
+                    →{" "}
+                    <code className="bg-muted rounded px-1 py-0.5 font-mono">
+                      {config.pathReplacement}
                     </code>
                   </span>
                 )}

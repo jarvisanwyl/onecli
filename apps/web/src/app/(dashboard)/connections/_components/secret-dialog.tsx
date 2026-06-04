@@ -35,6 +35,7 @@ import {
   detectAnthropicAuthMode,
   isHeaderInjection,
   isParamInjection,
+  isPathInjection,
   looksLikeAnthropicKey,
   looksLikeOpenaiKey,
 } from "@onecli/api/validations/secret";
@@ -159,13 +160,15 @@ export const SecretDialog = ({
   const [value, setValue] = useState("");
   const [hostPattern, setHostPattern] = useState("api.anthropic.com");
   const [pathPattern, setPathPattern] = useState("");
-  const [injectionTarget, setInjectionTarget] = useState<"header" | "param">(
-    "header",
-  );
+  const [injectionTarget, setInjectionTarget] = useState<
+    "header" | "param" | "path"
+  >("header");
   const [headerName, setHeaderName] = useState("Authorization");
   const [valueFormat, setValueFormat] = useState("Bearer {value}");
   const [paramName, setParamName] = useState("");
   const [paramFormat, setParamFormat] = useState("");
+  const [pathSearch, setPathSearch] = useState("");
+  const [pathReplacement, setPathReplacement] = useState("");
 
   const nameError = useMemo(() => validateDisplayName(name), [name]);
   const showNameError = nameTouched && nameError !== null;
@@ -195,7 +198,15 @@ export const SecretDialog = ({
         setValue("");
         setHostPattern(secret.hostPattern);
         setPathPattern(secret.pathPattern ?? "");
-        if (isParamInjection(config)) {
+        if (isPathInjection(config)) {
+          setInjectionTarget("path");
+          setPathSearch(config.pathSearch);
+          setPathReplacement(config.pathReplacement);
+          setHeaderName("");
+          setValueFormat("");
+          setParamName("");
+          setParamFormat("");
+        } else if (isParamInjection(config)) {
           setInjectionTarget("param");
           setParamName(config.paramName);
           setParamFormat(config.paramFormat ?? "");
@@ -267,7 +278,11 @@ export const SecretDialog = ({
 
   const hasInjectionTarget =
     type !== "generic" ||
-    (injectionTarget === "header" ? headerName.trim() : paramName.trim());
+    (injectionTarget === "header"
+      ? headerName.trim()
+      : injectionTarget === "param"
+        ? paramName.trim()
+        : pathSearch.trim());
 
   const isPlatformEdit = isEdit && secret?.isPlatform;
   const isValid = isPlatformEdit
@@ -288,6 +303,9 @@ export const SecretDialog = ({
         if (type !== "generic") return undefined;
         if (injectionTarget === "param") {
           return { paramName, paramFormat: paramFormat || "{value}" };
+        }
+        if (injectionTarget === "path") {
+          return { pathSearch, pathReplacement };
         }
         return { headerName, valueFormat: valueFormat || "{value}" };
       };
@@ -557,12 +575,18 @@ export const SecretDialog = ({
                       )
                         return;
                       e.preventDefault();
-                      const next =
-                        injectionTarget === "header" ? "param" : "header";
+                      const next: "header" | "param" | "path" =
+                        injectionTarget === "header"
+                          ? "param"
+                          : injectionTarget === "param"
+                            ? "path"
+                            : "header";
                       setInjectionTarget(next);
                       e.currentTarget
                         .querySelectorAll<HTMLButtonElement>('[role="radio"]')
-                        [next === "header" ? 0 : 1]?.focus();
+                        [
+                          next === "header" ? 0 : next === "param" ? 1 : 2
+                        ]?.focus();
                     }}
                   >
                     <button
@@ -595,6 +619,21 @@ export const SecretDialog = ({
                     >
                       URL Parameter
                     </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={injectionTarget === "path"}
+                      tabIndex={injectionTarget === "path" ? 0 : -1}
+                      className={cn(
+                        "border-input border-l px-3 py-1.5 text-xs font-medium transition-colors",
+                        injectionTarget === "path"
+                          ? "bg-accent text-foreground"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                      onClick={() => setInjectionTarget("path")}
+                    >
+                      URL path
+                    </button>
                   </div>
                 </div>
               )}
@@ -604,37 +643,72 @@ export const SecretDialog = ({
                   key={`name-${injectionTarget}`}
                   className="animate-in fade-in duration-150 space-y-2"
                 >
-                  <Label
-                    htmlFor={
-                      injectionTarget === "header"
-                        ? "secret-header"
-                        : "secret-param"
-                    }
-                  >
-                    {injectionTarget === "header"
-                      ? "Header name"
-                      : "Parameter name"}
-                  </Label>
-                  <Input
-                    id={
-                      injectionTarget === "header"
-                        ? "secret-header"
-                        : "secret-param"
-                    }
-                    placeholder={
-                      injectionTarget === "header"
-                        ? "e.g. Authorization"
-                        : "e.g. api_key"
-                    }
-                    value={
-                      injectionTarget === "header" ? headerName : paramName
-                    }
-                    onChange={(e) =>
-                      injectionTarget === "header"
-                        ? setHeaderName(e.target.value)
-                        : setParamName(e.target.value)
-                    }
-                  />
+                  {injectionTarget === "path" ? (
+                    <>
+                      <Label htmlFor="secret-path-search">Path search</Label>
+                      <Input
+                        id="secret-path-search"
+                        placeholder="e.g. botPLACEHOLDER"
+                        value={pathSearch}
+                        onChange={(e) => setPathSearch(e.target.value)}
+                      />
+                      <p className="text-muted-foreground text-xs">
+                        Literal placeholder to find in the URL path. Use a
+                        unique string to avoid matching other path segments.
+                      </p>
+                      <Label
+                        htmlFor="secret-path-replacement"
+                        className="pt-2 block"
+                      >
+                        Path replacement
+                      </Label>
+                      <Input
+                        id="secret-path-replacement"
+                        placeholder="e.g. bot{value}"
+                        value={pathReplacement}
+                        onChange={(e) => setPathReplacement(e.target.value)}
+                      />
+                      <p className="text-muted-foreground text-xs">
+                        Use <code className="text-xs">{"{value}"}</code> as a
+                        placeholder for the secret. The literal string is sent
+                        if no token is present.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <Label
+                        htmlFor={
+                          injectionTarget === "header"
+                            ? "secret-header"
+                            : "secret-param"
+                        }
+                      >
+                        {injectionTarget === "header"
+                          ? "Header name"
+                          : "Parameter name"}
+                      </Label>
+                      <Input
+                        id={
+                          injectionTarget === "header"
+                            ? "secret-header"
+                            : "secret-param"
+                        }
+                        placeholder={
+                          injectionTarget === "header"
+                            ? "e.g. Authorization"
+                            : "e.g. api_key"
+                        }
+                        value={
+                          injectionTarget === "header" ? headerName : paramName
+                        }
+                        onChange={(e) =>
+                          injectionTarget === "header"
+                            ? setHeaderName(e.target.value)
+                            : setParamName(e.target.value)
+                        }
+                      />
+                    </>
+                  )}
                 </div>
               )}
 
@@ -696,7 +770,7 @@ export const SecretDialog = ({
                           />
                         </div>
 
-                        {type === "generic" && (
+                        {type === "generic" && injectionTarget !== "path" && (
                           <div
                             key={`format-${injectionTarget}`}
                             className="animate-in fade-in duration-150 space-y-2"
