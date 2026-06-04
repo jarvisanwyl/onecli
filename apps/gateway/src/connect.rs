@@ -1002,6 +1002,10 @@ fn build_injections(
         "generic" => {
             let config = injection_config.and_then(|v| v.as_object());
 
+            // Accumulator: header / param stay mutually exclusive (header wins
+            // when both are present), but path composes additively with either.
+            let mut injections: Vec<Injection> = Vec::new();
+
             // Check for header injection
             let header_name = config
                 .and_then(|c| c.get("headerName"))
@@ -1028,10 +1032,10 @@ fn build_injections(
                     None => decrypted_value.to_string(),
                 };
 
-                vec![Injection::SetHeader {
+                injections.push(Injection::SetHeader {
                     name: header_name.to_string(),
                     value,
-                }]
+                });
             } else if let Some(param_name) = param_name {
                 let param_format = config
                     .and_then(|c| c.get("paramFormat"))
@@ -1042,13 +1046,31 @@ fn build_injections(
                     None => decrypted_value.to_string(),
                 };
 
-                vec![Injection::SetParam {
+                injections.push(Injection::SetParam {
                     name: param_name.to_string(),
                     value,
-                }]
-            } else {
-                vec![]
+                });
             }
+
+            // Path injection — composes additively with header OR param.
+            // `pathSearch` is taken literally (never templated); only
+            // `pathReplacement` has `{value}` expanded.
+            let path_search = config
+                .and_then(|c| c.get("pathSearch"))
+                .and_then(|v| v.as_str());
+            let path_replacement = config
+                .and_then(|c| c.get("pathReplacement"))
+                .and_then(|v| v.as_str());
+
+            if let (Some(search), Some(replacement)) = (path_search, path_replacement) {
+                let expanded = replacement.replace("{value}", decrypted_value);
+                injections.push(Injection::SetPath {
+                    search: search.to_string(),
+                    replacement: expanded,
+                });
+            }
+
+            injections
         }
 
         _ => vec![],
@@ -1329,5 +1351,81 @@ mod tests {
         let injections = build_injections("generic", "my-secret", Some(&config));
         assert_eq!(injections.len(), 1);
         assert!(matches!(injections[0], Injection::SetHeader { .. }));
+    }
+
+    // ── build_injections: pathSearch / pathReplacement ───────────────────
+
+    #[test]
+    fn build_injections_generic_path() {
+        let config = serde_json::json!({
+            "pathSearch": "PLACEHOLDER",
+            "pathReplacement": "{value}"
+        });
+        let injections = build_injections("generic", "secret123", Some(&config));
+        assert_eq!(injections.len(), 1);
+        assert_eq!(
+            injections[0],
+            Injection::SetPath {
+                search: "PLACEHOLDER".to_string(),
+                replacement: "secret123".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn build_injections_generic_path_with_format() {
+        // Telegram Bot API style: "BOT" → "bot<token>"
+        let config = serde_json::json!({
+            "pathSearch": "BOT",
+            "pathReplacement": "bot{value}"
+        });
+        let injections = build_injections("generic", "token:abc", Some(&config));
+        assert_eq!(injections.len(), 1);
+        assert_eq!(
+            injections[0],
+            Injection::SetPath {
+                search: "BOT".to_string(),
+                replacement: "bottoken:abc".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn build_injections_generic_path_and_header() {
+        // Path composes additively with header.
+        let config = serde_json::json!({
+            "headerName": "X-Trace",
+            "valueFormat": "{value}",
+            "pathSearch": "PLACEHOLDER",
+            "pathReplacement": "{value}"
+        });
+        let injections = build_injections("generic", "v1", Some(&config));
+        assert_eq!(injections.len(), 2);
+        assert!(injections.contains(&Injection::SetHeader {
+            name: "X-Trace".to_string(),
+            value: "v1".to_string(),
+        }));
+        assert!(injections.contains(&Injection::SetPath {
+            search: "PLACEHOLDER".to_string(),
+            replacement: "v1".to_string(),
+        }));
+    }
+
+    #[test]
+    fn build_injections_generic_path_no_value_template() {
+        // No `{value}` in the replacement → use it literally.
+        let config = serde_json::json!({
+            "pathSearch": "PLACEHOLDER",
+            "pathReplacement": "static-suffix"
+        });
+        let injections = build_injections("generic", "ignored", Some(&config));
+        assert_eq!(injections.len(), 1);
+        assert_eq!(
+            injections[0],
+            Injection::SetPath {
+                search: "PLACEHOLDER".to_string(),
+                replacement: "static-suffix".to_string(),
+            }
+        );
     }
 }
