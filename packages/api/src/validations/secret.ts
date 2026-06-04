@@ -14,14 +14,25 @@ const paramInjectionSchema = z
   })
   .strict();
 
+const pathInjectionSchema = z
+  .object({
+    pathSearch: z.string().min(1),
+    pathReplacement: z.string().min(1),
+  })
+  .strict();
+
 const injectionConfigSchema = z
-  .union([headerInjectionSchema, paramInjectionSchema])
+  .union([headerInjectionSchema, paramInjectionSchema, pathInjectionSchema])
   .nullable()
   .optional();
 
 export type HeaderInjectionConfig = z.infer<typeof headerInjectionSchema>;
 export type ParamInjectionConfig = z.infer<typeof paramInjectionSchema>;
-export type InjectionConfig = HeaderInjectionConfig | ParamInjectionConfig;
+export type PathInjectionConfig = z.infer<typeof pathInjectionSchema>;
+export type InjectionConfig =
+  | HeaderInjectionConfig
+  | ParamInjectionConfig
+  | PathInjectionConfig;
 
 export const isHeaderInjection = (
   config: unknown,
@@ -38,6 +49,14 @@ export const isParamInjection = (
   typeof config === "object" &&
   "paramName" in config &&
   typeof (config as Record<string, unknown>).paramName === "string";
+
+export const isPathInjection = (
+  config: unknown,
+): config is PathInjectionConfig =>
+  config !== null &&
+  typeof config === "object" &&
+  "pathSearch" in config &&
+  typeof (config as Record<string, unknown>).pathSearch === "string";
 
 const hostPatternSchema = z
   .string()

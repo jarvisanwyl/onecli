@@ -5,6 +5,7 @@ import {
   detectAnthropicAuthMode,
   isHeaderInjection,
   isParamInjection,
+  isPathInjection,
   type CreateSecretInput,
   type UpdateSecretInput,
 } from "../validations/secret";
@@ -72,10 +73,11 @@ export const createSecret = async (
     const config = input.injectionConfig;
     const hasHeader = isHeaderInjection(config) && config.headerName.trim();
     const hasParam = isParamInjection(config) && config.paramName.trim();
-    if (!hasHeader && !hasParam) {
+    const hasPath = isPathInjection(config) && config.pathSearch.trim();
+    if (!hasHeader && !hasParam && !hasPath) {
       throw new ServiceError(
         "BAD_REQUEST",
-        "Header name or parameter name is required for generic secrets",
+        "Header name, parameter name, or path search is required for generic secrets",
       );
     }
   }
@@ -95,6 +97,11 @@ export const createSecret = async (
       injectionConfig = {
         headerName: input.injectionConfig.headerName.trim(),
         valueFormat: input.injectionConfig.valueFormat?.trim() || "{value}",
+      } as Prisma.InputJsonValue;
+    } else if (isPathInjection(input.injectionConfig)) {
+      injectionConfig = {
+        pathSearch: input.injectionConfig.pathSearch.trim(),
+        pathReplacement: input.injectionConfig.pathReplacement.trim(),
       } as Prisma.InputJsonValue;
     }
   }
@@ -222,6 +229,11 @@ export const updateSecret = async (
       data.injectionConfig = {
         headerName: input.injectionConfig.headerName.trim(),
         valueFormat: input.injectionConfig.valueFormat?.trim() || "{value}",
+      } as Prisma.InputJsonValue;
+    } else if (isPathInjection(input.injectionConfig)) {
+      data.injectionConfig = {
+        pathSearch: input.injectionConfig.pathSearch.trim(),
+        pathReplacement: input.injectionConfig.pathReplacement.trim(),
       } as Prisma.InputJsonValue;
     } else {
       data.injectionConfig = Prisma.JsonNull;
