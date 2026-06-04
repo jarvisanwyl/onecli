@@ -133,7 +133,10 @@ pub(crate) fn apply_injections(
                     apply_set_param(request_path, name, value);
                     count += 1;
                 }
-                Injection::SetPath { search, replacement } => {
+                Injection::SetPath {
+                    search,
+                    replacement,
+                } => {
                     apply_set_path(request_path, search, replacement);
                     count += 1;
                 }
