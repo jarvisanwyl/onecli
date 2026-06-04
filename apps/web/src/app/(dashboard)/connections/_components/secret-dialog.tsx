@@ -309,7 +309,7 @@ export const SecretDialog = ({
           return { paramName, paramFormat: paramFormat || "{value}" };
         }
         if (injectionTarget === "path") {
-          return { pathSearch, pathReplacement };
+          return { pathSearch, pathReplacement: pathReplacement || "{value}" };
         }
         return { headerName, valueFormat: valueFormat || "{value}" };
       };
@@ -709,7 +709,9 @@ export const SecretDialog = ({
                                   id="secret-path-search"
                                   placeholder="e.g. botPLACEHOLDER"
                                   value={pathSearch}
-                                  onChange={(e) => setPathSearch(e.target.value)}
+                                  onChange={(e) =>
+                                    setPathSearch(e.target.value)
+                                  }
                                 />
                                 <p className="text-muted-foreground text-xs">
                                   Literal placeholder to find in the URL path.
