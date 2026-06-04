@@ -39,6 +39,15 @@ pub(crate) enum Injection {
         name: String,
         value: String,
     },
+    /// Search-and-replace within the URL path portion (before `?` and `#`).
+    /// Used for services that embed credentials directly in the path,
+    /// e.g. Telegram Bot API: `https://api.telegram.org/bot<TOKEN>/sendMessage`.
+    /// Both `search` and `replacement` are pre-expanded (no `{value}` here);
+    /// the `{value}` template expansion happens in `build_injections()`.
+    SetPath {
+        search: String,
+        replacement: String,
+    },
 }
 
 /// A rule matching a path pattern with injection instructions.
@@ -124,6 +133,10 @@ pub(crate) fn apply_injections(
                     apply_set_param(request_path, name, value);
                     count += 1;
                 }
+                Injection::SetPath { search, replacement } => {
+                    apply_set_path(request_path, search, replacement);
+                    count += 1;
+                }
             }
         }
     }
@@ -195,6 +208,51 @@ fn apply_set_param(request_path: &mut String, name: &str, value: &str) {
 
     if let Some(frag) = fragment {
         request_path.push_str(&frag);
+    }
+}
+
+/// Search-and-replace within the URL path portion (before `?` and `#`).
+///
+/// Used for services that embed credentials directly in the URL path,
+/// e.g. Telegram Bot API: `https://api.telegram.org/bot<TOKEN>/sendMessage`.
+///
+/// The replacement is a simple string substitution (no regex engine, no
+/// ReDoS surface) — adequate for placeholder-style searches like `botPLACEHOLDER`.
+///
+/// `search` is taken literally. An empty `search` is a silent no-op
+/// (Rust's `str::replace` would otherwise panic).
+fn apply_set_path(request_path: &mut String, search: &str, value: &str) {
+    // Guard: str::replace with an empty search panics. Treat as a no-op.
+    if search.is_empty() {
+        return;
+    }
+
+    // Strip fragment first — it must stay last.
+    let fragment = request_path.find('#').map(|pos| {
+        let frag = request_path[pos..].to_string();
+        request_path.truncate(pos);
+        frag
+    });
+
+    // Strip query — we only touch the path portion.
+    let query = match request_path.find('?') {
+        Some(qmark) => {
+            let q = request_path[qmark..].to_string();
+            request_path.truncate(qmark);
+            Some(q)
+        }
+        None => None,
+    };
+
+    // Replace all occurrences in the path portion only.
+    *request_path = request_path.replace(search, value);
+
+    // Reassemble: path + query + fragment.
+    if let Some(q) = query {
+        request_path.push_str(&q);
+    }
+    if let Some(f) = fragment {
+        request_path.push_str(&f);
     }
 }
 
@@ -978,5 +1036,121 @@ mod tests {
         assert_eq!(count, 2);
         assert!(path.contains("api_key=sk-123"));
         assert_eq!(headers.get("x-custom").unwrap(), "value");
+    }
+
+    // ── SetPath ────────────────────────────────────────────────────────
+
+    fn set_path(search: &str, replacement: &str) -> Injection {
+        Injection::SetPath {
+            search: search.to_string(),
+            replacement: replacement.to_string(),
+        }
+    }
+
+    #[test]
+    fn set_path_simple_replacement() {
+        // Telegram Bot API use case: botPLACEHOLDER → bot12345:token
+        let mut path = "/botPLACEHOLDER/sendMessage".to_string();
+        apply_set_path(&mut path, "botPLACEHOLDER", "bot12345:token");
+        assert_eq!(path, "/bot12345:token/sendMessage");
+    }
+
+    #[test]
+    fn set_path_no_match_unchanged() {
+        let mut path = "/v1/messages".to_string();
+        apply_set_path(&mut path, "botPLACEHOLDER", "bot12345:token");
+        assert_eq!(path, "/v1/messages");
+    }
+
+    #[test]
+    fn set_path_preserves_query_string() {
+        let mut path = "/botPLACEHOLDER/sendMessage?chat_id=42".to_string();
+        apply_set_path(&mut path, "botPLACEHOLDER", "bot12345:token");
+        assert_eq!(path, "/bot12345:token/sendMessage?chat_id=42");
+    }
+
+    #[test]
+    fn set_path_preserves_fragment() {
+        let mut path = "/botPLACEHOLDER/sendMessage#section".to_string();
+        apply_set_path(&mut path, "botPLACEHOLDER", "bot12345:token");
+        assert_eq!(path, "/bot12345:token/sendMessage#section");
+    }
+
+    #[test]
+    fn set_path_query_and_fragment() {
+        let mut path = "/botPLACEHOLDER/sendMessage?q=hello#sec".to_string();
+        apply_set_path(&mut path, "botPLACEHOLDER", "bot12345:token");
+        assert_eq!(path, "/bot12345:token/sendMessage?q=hello#sec");
+    }
+
+    #[test]
+    fn set_path_multiple_occurrences() {
+        // All occurrences in the path portion get replaced.
+        // Query string is left alone (which is the documented behaviour).
+        let mut path = "/v1/botPLACEHOLDER/foo/botPLACEHOLDER/bar?ref=botPLACEHOLDER".to_string();
+        apply_set_path(&mut path, "botPLACEHOLDER", "BOT");
+        // Two replacements in the path; the one inside the query string is
+        // preserved (path injection only touches the path portion).
+        assert_eq!(path, "/v1/BOT/foo/BOT/bar?ref=botPLACEHOLDER");
+    }
+
+    #[test]
+    fn set_path_via_apply_injections() {
+        // Full pipeline: rule with SetPath injection goes through apply_injections.
+        let mut headers = hyper::HeaderMap::new();
+        let mut path = "/botPLACEHOLDER/getMe".to_string();
+
+        let rules = vec![make_rule(
+            "*",
+            vec![set_path("botPLACEHOLDER", "bot12345:token")],
+        )];
+
+        let count = apply_injections(&mut headers, &mut path, &rules);
+        assert_eq!(count, 1);
+        assert_eq!(path, "/bot12345:token/getMe");
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn set_path_combined_with_set_param() {
+        // SetPath composes with SetParam in the same rule.
+        let mut headers = hyper::HeaderMap::new();
+        let mut path = "/botPLACEHOLDER/sendMessage".to_string();
+
+        let rules = vec![make_rule(
+            "*",
+            vec![
+                set_path("botPLACEHOLDER", "bot12345:token"),
+                set_param("chat_id", "42"),
+            ],
+        )];
+
+        let count = apply_injections(&mut headers, &mut path, &rules);
+        assert_eq!(count, 2);
+        assert_eq!(path, "/bot12345:token/sendMessage?chat_id=42");
+    }
+
+    #[test]
+    fn set_path_path_mismatch_skips_injection() {
+        let mut headers = hyper::HeaderMap::new();
+        let mut path = "/v2/messages".to_string();
+
+        let rules = vec![make_rule(
+            "/v1/*",
+            vec![set_path("botPLACEHOLDER", "bot12345:token")],
+        )];
+
+        let count = apply_injections(&mut headers, &mut path, &rules);
+        assert_eq!(count, 0);
+        assert_eq!(path, "/v2/messages");
+    }
+
+    #[test]
+    fn set_path_empty_search() {
+        // Empty search must not panic (str::replace would) and must not
+        // mutate the path. Documented as a silent no-op in the gateway.
+        let mut path = "/v1/messages".to_string();
+        apply_set_path(&mut path, "", "should-not-be-inserted");
+        assert_eq!(path, "/v1/messages");
     }
 }
