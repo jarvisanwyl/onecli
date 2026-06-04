@@ -7,6 +7,7 @@ import {
   detectAnthropicAuthMode,
   isHeaderInjection,
   isParamInjection,
+  isPathInjection,
   type CreateSecretInput,
   type UpdateSecretInput,
 } from "../validations/secret";
@@ -36,6 +37,12 @@ const buildInjectionConfig = (
     return {
       headerName: config.headerName.trim(),
       valueFormat: config.valueFormat?.trim() || "{value}",
+    } as Prisma.InputJsonValue;
+  }
+  if (isPathInjection(config)) {
+    return {
+      pathSearch: config.pathSearch.trim(),
+      pathReplacement: config.pathReplacement.trim(),
     } as Prisma.InputJsonValue;
   }
   return Prisma.JsonNull;
@@ -104,10 +111,11 @@ export const createSecret = async (
     const config = input.injectionConfig;
     const hasHeader = isHeaderInjection(config) && config.headerName.trim();
     const hasParam = isParamInjection(config) && config.paramName.trim();
-    if (!hasHeader && !hasParam) {
+    const hasPath = isPathInjection(config) && config.pathSearch.trim();
+    if (!hasHeader && !hasParam && !hasPath) {
       throw new ServiceError(
         "BAD_REQUEST",
-        "Header name or parameter name is required for generic secrets",
+        "Header name, parameter name, or path search is required for generic secrets",
       );
     }
   }
